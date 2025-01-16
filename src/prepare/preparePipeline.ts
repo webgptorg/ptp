@@ -27,7 +27,7 @@ import type { PrepareAndScrapeOptions } from './PrepareAndScrapeOptions';
 import { prepareTasks } from './prepareTasks';
 
 /**
- * Prepare pipeline from string (markdown) format to JSON format
+ * Prepare pipeline locally
  *
  * @see https://github.com/webgptorg/promptbook/discussions/196
  *
@@ -219,7 +219,7 @@ export async function preparePipeline(
 }
 
 /**
- * TODO: Write tests for `preparePipeline`
+ * TODO: Write tests for `preparePipeline` and `preparePipelineOnRemoteServer`
  * TODO: [🏏] Leverage the batch API and build queues @see https://platform.openai.com/docs/guides/batch
  * TODO: [🧊] In future one preparation can take data from previous preparation and save tokens and time
  * TODO: [🛠] Actions, instruments (and maybe knowledge) => Functions and tools

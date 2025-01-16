@@ -671,12 +671,15 @@ Editing, templates and flat pipelines
 
 ## In pre-release
 
-### `0.82.0` _(2025-01-!!!)_
+### `0.82.0` _(2025-01-16)_
 
 Compile via remote server
 
 -   Add `compilePipelineOnRemoteServer` to package `@promptbook/remote-client`
 -   Add `preparePipelineOnRemoteServer` to package `@promptbook/remote-client`
+-   Changes in remote server that are not backward compatible
+-   Add `DEFAULT_TASK_TITLE`
+-   Enforce LF (\n) lines
 
 ## Drafts
 

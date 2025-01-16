@@ -1,9 +1,11 @@
 import type { AvailableModel } from '../../../execution/AvailableModel';
 
 /**
- * Socket.io error for remote text generation
+ * Models available for use in the server
  *
  * This is sent from server to client when models are listed
+ *
+ * @private internal type of remote server
  */
 export type PromptbookServer_ListModels_Response = {
     /**

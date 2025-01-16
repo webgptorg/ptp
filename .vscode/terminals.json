@@ -132,6 +132,12 @@
             "focus": true
         },
         {
+            "name": "🏭🩹 Fix end of lines to LF",
+            "command": "./scripts/lines-to-lf.sh",
+            "onlySingle": true,
+            "focus": true
+        },
+        {
             "name": "🔎🩹 Find name discrepancies",
             "commands": ["npx ts-node ./scripts/find-name-discrepancies/find-name-discrepancies.ts"],
             "execute": true,

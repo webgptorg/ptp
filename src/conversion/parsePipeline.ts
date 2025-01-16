@@ -10,6 +10,7 @@ import type { CommandBase } from '../commands/_common/types/CommandParser';
 import type { PipelineHeadCommandParser } from '../commands/_common/types/CommandParser';
 import type { PipelineTaskCommandParser } from '../commands/_common/types/CommandParser';
 import { DEFAULT_BOOK_TITLE } from '../config';
+import { DEFAULT_TASK_TITLE } from '../config';
 import { ORDER_OF_PIPELINE_JSON } from '../constants';
 import { RESERVED_PARAMETER_NAMES } from '../constants';
 import { ParseError } from '../errors/ParseError';
@@ -413,8 +414,8 @@ export function parsePipeline(pipelineString: PipelineString): PipelineJson {
             isSectionTypeSet: false,
             isTask: true,
             taskType: undefined /* <- Note: [🍙] Putting here placeholder to keep `taskType` on top at final JSON */,
-            name: getUniqueSectionName(section.title),
-            title: section.title,
+            name: getUniqueSectionName(section.title || DEFAULT_TASK_TITLE),
+            title: section.title || DEFAULT_TASK_TITLE,
             description,
             content,
             // <- TODO: [🍙] Some standard order of properties

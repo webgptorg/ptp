@@ -3,21 +3,29 @@ import type { IDestroyable } from 'destroyable';
 import http from 'http';
 import { Server, Socket } from 'socket.io';
 import { spaceTrim } from 'spacetrim';
-import { DEFAULT_IS_VERBOSE } from '../../config';
-import { PipelineExecutionError } from '../../errors/PipelineExecutionError';
-import { serializeError } from '../../errors/utils/serializeError';
-import type { LlmExecutionTools } from '../../execution/LlmExecutionTools';
-import type { PromptResult } from '../../execution/PromptResult';
-import { keepTypeImported } from '../../utils/organization/keepTypeImported';
-import type { really_any } from '../../utils/organization/really_any';
-import { PROMPTBOOK_ENGINE_VERSION } from '../../version';
-import { createLlmToolsFromConfiguration } from '../_common/register/createLlmToolsFromConfiguration';
-import type { PromptbookServer_Error } from './interfaces/PromptbookServer_Error';
-import type { PromptbookServer_ListModels_Request } from './interfaces/PromptbookServer_ListModels_Request';
-import type { PromptbookServer_ListModels_Response } from './interfaces/PromptbookServer_ListModels_Response';
-import type { PromptbookServer_Prompt_Request } from './interfaces/PromptbookServer_Prompt_Request';
-import type { PromptbookServer_Prompt_Response } from './interfaces/PromptbookServer_Prompt_Response';
-import type { RemoteServerOptions } from './interfaces/RemoteServerOptions';
+import { $provideFilesystemForNode } from '../scrapers/_common/register/$provideFilesystemForNode';
+import { $provideScrapersForNode } from '../scrapers/_common/register/$provideScrapersForNode';
+import { DEFAULT_IS_VERBOSE } from '../config';
+import { PipelineExecutionError } from '../errors/PipelineExecutionError';
+import { serializeError } from '../errors/utils/serializeError';
+import { $provideExecutablesForNode } from '../executables/$provideExecutablesForNode';
+import type { ExecutionTools } from '../execution/ExecutionTools';
+import type { LlmExecutionTools } from '../execution/LlmExecutionTools';
+import type { PromptResult } from '../execution/PromptResult';
+import { createLlmToolsFromConfiguration } from '../llm-providers/_common/register/createLlmToolsFromConfiguration';
+import { preparePipeline } from '../prepare/preparePipeline';
+import { keepTypeImported } from '../utils/organization/keepTypeImported';
+import type { really_any } from '../utils/organization/really_any';
+import { PROMPTBOOK_ENGINE_VERSION } from '../version';
+import type { PromptbookServer_Error } from './socket-types/_common/PromptbookServer_Error';
+import type { PromptbookServer_Identification } from './socket-types/_subtypes/PromptbookServer_Identification';
+import type { PromptbookServer_ListModels_Request } from './socket-types/listModels/PromptbookServer_ListModels_Request';
+import type { PromptbookServer_ListModels_Response } from './socket-types/listModels/PromptbookServer_ListModels_Response';
+import type { PromptbookServer_PreparePipeline_Request } from './socket-types/prepare/PromptbookServer_PreparePipeline_Request';
+import type { PromptbookServer_PreparePipeline_Response } from './socket-types/prepare/PromptbookServer_PreparePipeline_Response';
+import type { PromptbookServer_Prompt_Request } from './socket-types/prompt/PromptbookServer_Prompt_Request';
+import type { PromptbookServer_Prompt_Response } from './socket-types/prompt/PromptbookServer_Prompt_Response';
+import type { RemoteServerOptions } from './types/RemoteServerOptions';
 
 keepTypeImported<PromptbookServer_Prompt_Response>();
 keepTypeImported<PromptbookServer_Error>();
@@ -97,77 +105,99 @@ export function startRemoteServer<TCustomOptions = undefined>(
             console.info(colors.gray(`Client connected`), socket.id);
         }
 
-        socket.on('prompt-request', async (request: PromptbookServer_Prompt_Request<TCustomOptions>) => {
-            const { isAnonymous, prompt, appId, userId, customOptions, llmToolsConfiguration } = {
-                appId: null,
-                customOptions: undefined,
-                llmToolsConfiguration: null,
-                ...request,
+        const getExecutionToolsFromIdentification = async (
+            identification: PromptbookServer_Identification<TCustomOptions>,
+        ): Promise<ExecutionTools & { llm: LlmExecutionTools }> => {
+            const { isAnonymous } = identification;
+
+            if (isAnonymous === true && !isAnonymousModeAllowed) {
+                throw new PipelineExecutionError(`Anonymous mode is not allowed`); // <- TODO: [main] !!3 Test
+            }
+
+            if (isAnonymous === false && !isApplicationModeAllowed) {
+                throw new PipelineExecutionError(`Application mode is not allowed`); // <- TODO: [main] !!3 Test
+            }
+
+            // TODO: [main] !!4 Validate here userId (pass validator as dependency)
+
+            let llm: LlmExecutionTools;
+
+            if (isAnonymous === true) {
+                // Note: Anonymouse mode
+                // TODO: Maybe check that configuration is not empty
+                const { llmToolsConfiguration } = identification;
+                llm = createLlmToolsFromConfiguration(llmToolsConfiguration, { isVerbose });
+            } else if (isAnonymous === false && createLlmExecutionTools !== null) {
+                // Note: Application mode
+                const { appId, userId, customOptions } = identification;
+                llm = await createLlmExecutionTools!({
+                    appId,
+                    userId,
+                    customOptions,
+                });
+            } else {
+                throw new PipelineExecutionError(
+                    `You must provide either llmToolsConfiguration or non-anonymous mode must be propperly configured`,
+                );
+            }
+
+            const fs = $provideFilesystemForNode();
+            const executables = await $provideExecutablesForNode();
+            const tools = {
+                llm,
+                fs,
+                scrapers: await $provideScrapersForNode({ fs, llm, executables }),
+                // TODO: Allow when `JavascriptExecutionTools` more secure *(without eval)*> script: [new JavascriptExecutionTools()],
             };
-            // <- TODO: [🦪] Some helper type to be able to use discriminant union types with destructuring
+
+            return tools;
+        };
+
+        // -----------
+
+        socket.on('prompt-request', async (request: PromptbookServer_Prompt_Request<TCustomOptions>) => {
+            const { identification, prompt } = request;
 
             if (isVerbose) {
                 console.info(colors.bgWhite(`Prompt:`), colors.gray(JSON.stringify(request, null, 4)));
             }
 
             try {
-                if (isAnonymous === true && !isAnonymousModeAllowed) {
-                    throw new PipelineExecutionError(`Anonymous mode is not allowed`); // <- TODO: [main] !!3 Test
-                }
+                const executionTools = await getExecutionToolsFromIdentification(identification);
+                const { llm } = executionTools;
 
-                if (isAnonymous === false && !isApplicationModeAllowed) {
-                    throw new PipelineExecutionError(`Application mode is not allowed`); // <- TODO: [main] !!3 Test
-                }
-
-                // TODO: [main] !!4 Validate here userId (pass validator as dependency)
-
-                let llmExecutionTools: LlmExecutionTools;
-
-                if (isAnonymous === true && llmToolsConfiguration !== null) {
-                    // Note: Anonymouse mode
-                    // TODO: Maybe check that configuration is not empty
-                    llmExecutionTools = createLlmToolsFromConfiguration(llmToolsConfiguration, { isVerbose });
-                } else if (isAnonymous === false && createLlmExecutionTools !== null) {
-                    // Note: Application mode
-                    llmExecutionTools = await createLlmExecutionTools({
-                        appId,
-                        userId,
-                        customOptions,
-                    });
-
-                    if (!(await collection.isResponsibleForPrompt(prompt))) {
-                        throw new PipelineExecutionError(`Pipeline is not in the collection of this server`);
-                    }
-                } else {
-                    throw new PipelineExecutionError(
-                        `You must provide either llmToolsConfiguration or non-anonymous mode must be propperly configured`,
-                    );
+                if (
+                    identification.isAnonymous === false &&
+                    collection !== null &&
+                    !(await collection.isResponsibleForPrompt(prompt))
+                ) {
+                    throw new PipelineExecutionError(`Pipeline is not in the collection of this server`);
                 }
 
                 let promptResult: PromptResult;
                 switch (prompt.modelRequirements.modelVariant) {
                     case 'CHAT':
-                        if (llmExecutionTools.callChatModel === undefined) {
+                        if (llm.callChatModel === undefined) {
                             // Note: [0] This check should not be a thing
                             throw new PipelineExecutionError(`Chat model is not available`);
                         }
-                        promptResult = await llmExecutionTools.callChatModel(prompt);
+                        promptResult = await llm.callChatModel(prompt);
                         break;
 
                     case 'COMPLETION':
-                        if (llmExecutionTools.callCompletionModel === undefined) {
+                        if (llm.callCompletionModel === undefined) {
                             // Note: [0] This check should not be a thing
                             throw new PipelineExecutionError(`Completion model is not available`);
                         }
-                        promptResult = await llmExecutionTools.callCompletionModel(prompt);
+                        promptResult = await llm.callCompletionModel(prompt);
                         break;
 
                     case 'EMBEDDING':
-                        if (llmExecutionTools.callEmbeddingModel === undefined) {
+                        if (llm.callEmbeddingModel === undefined) {
                             // Note: [0] This check should not be a thing
                             throw new PipelineExecutionError(`Embedding model is not available`);
                         }
-                        promptResult = await llmExecutionTools.callEmbeddingModel(prompt);
+                        promptResult = await llm.callEmbeddingModel(prompt);
                         break;
 
                     // <- case [🤖]:
@@ -194,51 +224,25 @@ export function startRemoteServer<TCustomOptions = undefined>(
                 socket.emit('error', serializeError(error) satisfies PromptbookServer_Error /* <- Note: [🤛] */);
             } finally {
                 socket.disconnect();
-                // TODO: [🍚]> llmExecutionTools.destroy();
+                // TODO: [🍚]> executionTools.destroy();
             }
         });
 
+        // -----------
+
         // TODO: [👒] Listing models (and checking configuration) probbably should go through REST API not Socket.io
         socket.on('listModels-request', async (request: PromptbookServer_ListModels_Request<TCustomOptions>) => {
-            const { isAnonymous, appId, userId, customOptions, llmToolsConfiguration } = {
-                appId: null,
-                customOptions: undefined,
-                llmToolsConfiguration: null,
-                ...request,
-            };
-            // <- TODO: [🦪] Some helper type to be able to use discriminant union types with destructuring
+            const { identification } = request;
 
             if (isVerbose) {
                 console.info(colors.bgWhite(`Listing models`));
             }
 
             try {
-                if (isAnonymous === true && !isAnonymousModeAllowed) {
-                    throw new PipelineExecutionError(`Anonymous mode is not allowed`); // <- TODO: [main] !!3 Test
-                }
+                const executionTools = await getExecutionToolsFromIdentification(identification);
+                const { llm } = executionTools;
 
-                if (isAnonymous === false && !isApplicationModeAllowed) {
-                    throw new PipelineExecutionError(`Application mode is not allowed`); // <- TODO: [main] !!3 Test
-                }
-
-                // TODO: [main] !!4 Validate here userId (pass validator as dependency)
-
-                let llmExecutionTools: LlmExecutionTools;
-
-                if (isAnonymous === true) {
-                    // Note: Anonymouse mode
-                    // TODO: Maybe check that configuration is not empty
-                    llmExecutionTools = createLlmToolsFromConfiguration(llmToolsConfiguration, { isVerbose });
-                } else {
-                    // Note: Application mode
-                    llmExecutionTools = await createLlmExecutionTools!({
-                        appId,
-                        userId,
-                        customOptions,
-                    });
-                }
-
-                const models = await llmExecutionTools.listModels();
+                const models = await llm.listModels();
 
                 socket.emit(
                     'listModels-response',
@@ -252,9 +256,45 @@ export function startRemoteServer<TCustomOptions = undefined>(
                 socket.emit('error', serializeError(error) satisfies PromptbookServer_Error);
             } finally {
                 socket.disconnect();
-                // TODO: [🍚]> llmExecutionTools.destroy();
+                // TODO: [🍚]> executionTools.destroy();
             }
         });
+
+        // -----------
+
+        // TODO: [👒] Listing models (and checking configuration) probbably should go through REST API not Socket.io
+        socket.on(
+            'preparePipeline-request',
+            async (request: PromptbookServer_PreparePipeline_Request<TCustomOptions>) => {
+                const { identification, pipeline } = request;
+
+                if (isVerbose) {
+                    console.info(colors.bgWhite(`Prepare pipeline`));
+                }
+
+                try {
+                    const executionTools = await getExecutionToolsFromIdentification(identification);
+
+                    const preparedPipeline = await preparePipeline(pipeline, executionTools, options);
+
+                    socket.emit(
+                        'preparePipeline-response',
+                        { preparedPipeline } satisfies PromptbookServer_PreparePipeline_Response /* <- Note: [🤛] */,
+                    );
+                } catch (error) {
+                    if (!(error instanceof Error)) {
+                        throw error;
+                    }
+
+                    socket.emit('error', serializeError(error) satisfies PromptbookServer_Error);
+                } finally {
+                    socket.disconnect();
+                    // TODO: [🍚]> executionTools.destroy();
+                }
+            },
+        );
+
+        // -----------
 
         socket.on('disconnect', () => {
             // TODO: Destroy here executionToolsForClient
@@ -290,6 +330,7 @@ export function startRemoteServer<TCustomOptions = undefined>(
 }
 
 /**
+ * TODO: Split this file into multiple functions - handler for each request
  * TODO: Maybe use `$exportJson`
  * TODO: [🧠][🛍] Maybe not `isAnonymous: boolean` BUT `mode: 'ANONYMOUS'|'COLLECTION'`
  * TODO: [⚖] Expose the collection to be able to connect to same collection via createCollectionFromUrl
@@ -298,5 +339,5 @@ export function startRemoteServer<TCustomOptions = undefined>(
  * TODO: [🗯] Timeout on chat to free up resources
  * TODO: [🃏] Pass here some security token to prevent malitious usage and/or DDoS
  * TODO: [0] Set unavailable models as undefined in `RemoteLlmExecutionTools` NOT throw error here
- * TODO: Constrain anonymous mode for specific models / providers
+ * TODO: Allow to constrain anonymous mode for specific models / providers
  */

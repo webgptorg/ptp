@@ -71,6 +71,13 @@ export const LOGO_DARK_SRC: string_url_image = `https://promptbook.studio/_next/
 export const DEFAULT_BOOK_TITLE = `✨ Untitled Book`;
 
 /**
+ * When the title of task is not provided, the default title is used
+ *
+ * @public exported from `@promptbook/core`
+ */
+export const DEFAULT_TASK_TITLE = `Task`;
+
+/**
  * Warning message for the generated sections and files files
  *
  * @private within the repository

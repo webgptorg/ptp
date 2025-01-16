@@ -1,7 +1,3 @@
-import type { Socket } from 'socket.io-client';
-import { io } from 'socket.io-client';
-import { CONNECTION_RETRIES_LIMIT } from '../../config';
-import { CONNECTION_TIMEOUT_MS } from '../../config';
 import { deserializeError } from '../../errors/utils/deserializeError';
 import type { AvailableModel } from '../../execution/AvailableModel';
 import type { LlmExecutionTools } from '../../execution/LlmExecutionTools';
@@ -9,6 +5,13 @@ import type { ChatPromptResult } from '../../execution/PromptResult';
 import type { CompletionPromptResult } from '../../execution/PromptResult';
 import type { EmbeddingPromptResult } from '../../execution/PromptResult';
 import type { PromptResult } from '../../execution/PromptResult';
+import { createRemoteClient } from '../../remote-server/createRemoteClient';
+import type { PromptbookServer_Error } from '../../remote-server/socket-types/_common/PromptbookServer_Error';
+import type { PromptbookServer_ListModels_Request } from '../../remote-server/socket-types/listModels/PromptbookServer_ListModels_Request';
+import type { PromptbookServer_ListModels_Response } from '../../remote-server/socket-types/listModels/PromptbookServer_ListModels_Response';
+import type { PromptbookServer_Prompt_Request } from '../../remote-server/socket-types/prompt/PromptbookServer_Prompt_Request';
+import type { PromptbookServer_Prompt_Response } from '../../remote-server/socket-types/prompt/PromptbookServer_Prompt_Response';
+import type { RemoteClientOptions } from '../../remote-server/types/RemoteClientOptions';
 import type { ChatPrompt } from '../../types/Prompt';
 import type { CompletionPrompt } from '../../types/Prompt';
 import type { EmbeddingPrompt } from '../../types/Prompt';
@@ -18,12 +21,6 @@ import type { string_markdown_text } from '../../types/typeAliases';
 import type { string_title } from '../../types/typeAliases';
 import { keepTypeImported } from '../../utils/organization/keepTypeImported';
 import type { really_any } from '../../utils/organization/really_any';
-import type { PromptbookServer_Error } from './interfaces/PromptbookServer_Error';
-import type { PromptbookServer_ListModels_Request } from './interfaces/PromptbookServer_ListModels_Request';
-import type { PromptbookServer_ListModels_Response } from './interfaces/PromptbookServer_ListModels_Response';
-import type { PromptbookServer_Prompt_Request } from './interfaces/PromptbookServer_Prompt_Request';
-import type { PromptbookServer_Prompt_Response } from './interfaces/PromptbookServer_Prompt_Response';
-import type { RemoteLlmExecutionToolsOptions } from './interfaces/RemoteLlmExecutionToolsOptions';
 
 keepTypeImported<PromptbookServer_ListModels_Request<really_any>>();
 keepTypeImported<PromptbookServer_Prompt_Request<really_any>>();
@@ -39,7 +36,7 @@ keepTypeImported<PromptbookServer_Prompt_Request<really_any>>();
  */
 export class RemoteLlmExecutionTools<TCustomOptions = undefined> implements LlmExecutionTools {
     /* <- TODO: [🍚] `, Destroyable` */
-    public constructor(protected readonly options: RemoteLlmExecutionToolsOptions<TCustomOptions>) {}
+    public constructor(protected readonly options: RemoteClientOptions<TCustomOptions>) {}
 
     public get title(): string_title & string_markdown_text {
         // TODO: [🧠] Maybe fetch title+description from the remote server (as well as if model methods are defined)
@@ -54,7 +51,7 @@ export class RemoteLlmExecutionTools<TCustomOptions = undefined> implements LlmE
      * Check the configuration of all execution tools
      */
     public async checkConfiguration(): Promise<void> {
-        const socket = await this.makeConnection();
+        const socket = await createRemoteClient(this.options);
         socket.disconnect();
 
         // TODO: [main] !!3 Check version of the remote server and compatibility
@@ -66,28 +63,14 @@ export class RemoteLlmExecutionTools<TCustomOptions = undefined> implements LlmE
      */
     public async listModels(): Promise<ReadonlyArray<AvailableModel>> {
         // TODO: [👒] Listing models (and checking configuration) probbably should go through REST API not Socket.io
-        const socket = await this.makeConnection();
+        const socket = await createRemoteClient(this.options);
 
-        if (this.options.isAnonymous) {
-            socket.emit(
-                'listModels-request',
-                {
-                    isAnonymous: true,
-                    userId: this.options.userId,
-                    llmToolsConfiguration: this.options.llmToolsConfiguration,
-                } satisfies PromptbookServer_ListModels_Request<TCustomOptions> /* <- Note: [🤛] */,
-            );
-        } else {
-            socket.emit(
-                'listModels-request',
-                {
-                    isAnonymous: false,
-                    appId: this.options.appId,
-                    userId: this.options.userId,
-                    customOptions: this.options.customOptions,
-                } satisfies PromptbookServer_ListModels_Request<TCustomOptions> /* <- Note: [🤛] */,
-            );
-        }
+        socket.emit(
+            'listModels-request',
+            {
+                identification: this.options.identification,
+            } satisfies PromptbookServer_ListModels_Request<TCustomOptions> /* <- Note: [🤛] */,
+        );
 
         const promptResult = await new Promise<ReadonlyArray<AvailableModel>>((resolve, reject) => {
             socket.on('listModels-response', (response: PromptbookServer_ListModels_Response) => {
@@ -103,33 +86,6 @@ export class RemoteLlmExecutionTools<TCustomOptions = undefined> implements LlmE
         socket.disconnect();
 
         return promptResult;
-    }
-
-    /**
-     * Creates a connection to the remote proxy server.
-     */
-    private makeConnection(): Promise<Socket> {
-        return new Promise((resolve, reject) => {
-            const socket = io(this.options.remoteUrl, {
-                retries: CONNECTION_RETRIES_LIMIT,
-                timeout: CONNECTION_TIMEOUT_MS,
-                path: this.options.path,
-                // path: `${this.remoteUrl.pathname}/socket.io`,
-                transports: [/*'websocket', <- TODO: [🌬] Make websocket transport work */ 'polling'],
-            });
-
-            // console.log('Connecting to', this.options.remoteUrl.href, { socket });
-
-            socket.on('connect', () => {
-                resolve(socket);
-            });
-
-            // TODO: [💩] Better timeout handling
-
-            setTimeout(() => {
-                reject(new Error(`Timeout while connecting to ${this.options.remoteUrl}`));
-            }, CONNECTION_TIMEOUT_MS);
-        });
     }
 
     /**
@@ -168,30 +124,15 @@ export class RemoteLlmExecutionTools<TCustomOptions = undefined> implements LlmE
      * Calls remote proxy server to use both completion or chat model
      */
     private async callCommonModel(prompt: Prompt): Promise<PromptResult> {
-        const socket = await this.makeConnection();
+        const socket = await createRemoteClient(this.options);
 
-        if (this.options.isAnonymous) {
-            socket.emit(
-                'prompt-request',
-                {
-                    isAnonymous: true,
-                    userId: this.options.userId,
-                    llmToolsConfiguration: this.options.llmToolsConfiguration,
-                    prompt,
-                } satisfies PromptbookServer_Prompt_Request<TCustomOptions> /* <- Note: [🤛] */,
-            );
-        } else {
-            socket.emit(
-                'prompt-request',
-                {
-                    isAnonymous: false,
-                    appId: this.options.appId,
-                    userId: this.options.userId,
-                    customOptions: this.options.customOptions,
-                    prompt,
-                } satisfies PromptbookServer_Prompt_Request<TCustomOptions> /* <- Note: [🤛] */,
-            );
-        }
+        socket.emit(
+            'prompt-request',
+            {
+                identification: this.options.identification,
+                prompt,
+            } satisfies PromptbookServer_Prompt_Request<TCustomOptions> /* <- Note: [🤛] */,
+        );
 
         const promptResult = await new Promise<PromptResult>((resolve, reject) => {
             socket.on('prompt-response', (response: PromptbookServer_Prompt_Response) => {
